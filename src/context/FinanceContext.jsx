@@ -1,175 +1,208 @@
-import React, { createContext, useContext, useReducer, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { useLocalStorage } from '../hooks/useLocalStorage';
+import * as api from '../utils/api';
 
-// Initial state
-const initialState = {
-  transactions: [],
-  categories: [
-    { id: '1', name: 'Food', color: '#38b000', type: 'expense' },
-    { id: '2', name: 'Transportation', color: '#ffb700', type: 'expense' },
-    { id: '3', name: 'Entertainment', color: '#9d4edd', type: 'expense' },
-    { id: '4', name: 'Utilities', color: '#0466c8', type: 'expense' },
-    { id: '5', name: 'Shopping', color: '#e85d04', type: 'expense' },
-    { id: '6', name: 'Salary', color: '#38b000', type: 'income' },
-    { id: '7', name: 'Freelance', color: '#0466c8', type: 'income' },
-    { id: '8', name: 'Gifts', color: '#9d4edd', type: 'income' },
-  ],
-  budgets: [],
-  isLoading: false,
-  error: null
-};
-
-// Reducer
-const financeReducer = (state, action) => {
-  switch (action.type) {
-    case 'SET_LOADING':
-      return { ...state, isLoading: action.payload };
-    case 'SET_ERROR':
-      return { ...state, error: action.payload, isLoading: false };
-    case 'SET_TRANSACTIONS':
-      return { ...state, transactions: action.payload, isLoading: false };
-    case 'ADD_TRANSACTION':
-      return { ...state, transactions: [action.payload, ...state.transactions] };
-    case 'DELETE_TRANSACTION':
-      return { ...state, transactions: state.transactions.filter(t => t.id !== action.payload) };
-    case 'SET_BUDGETS':
-      return { ...state, budgets: action.payload };
-    case 'ADD_BUDGET':
-      return { ...state, budgets: [...state.budgets, action.payload] };
-    case 'UPDATE_BUDGET':
-      return { 
-        ...state, 
-        budgets: state.budgets.map(b => 
-          b.id === action.payload.id ? action.payload : b
-        ) 
-      };
-    case 'ADD_CATEGORY':
-      return { ...state, categories: [...state.categories, action.payload] };
-    default:
-      return state;
-  }
-};
-
-
+// Create context
 const FinanceContext = createContext();
 
+// Custom hook to use finance context
+export const useFinance = () => {
+  const context = useContext(FinanceContext);
+  if (!context) {
+    throw new Error('useFinance must be used within a FinanceProvider');
+  }
+  return context;
+};
 
+// Provider component
 export const FinanceProvider = ({ children }) => {
-  const [state, dispatch] = useReducer(financeReducer, initialState);
+  // State
+  const [transactions, setTransactions] = useState([]);
+  const [budgets, setBudgets] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [currency, setCurrency] = useState('USD');
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  
+  // Load data on mount
   useEffect(() => {
-    const savedTransactions = localStorage.getItem('transactions');
-    const savedBudgets = localStorage.getItem('budgets');
-    
-    if (savedTransactions) {
-      dispatch({ type: 'SET_TRANSACTIONS', payload: JSON.parse(savedTransactions) });
-    }
-    
-    if (savedBudgets) {
-      dispatch({ type: 'SET_BUDGETS', payload: JSON.parse(savedBudgets) });
-    }
+    const loadData = async () => {
+      try {
+        setIsLoading(true);
+        const data = await api.getData();
+        setTransactions(data.transactions);
+        setBudgets(data.budgets);
+        setCategories(data.categories);
+        setCurrency(data.currency);
+      } catch (err) {
+        setError('Failed to load data');
+        console.error(err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadData();
   }, []);
 
- 
-  useEffect(() => {
-    localStorage.setItem('transactions', JSON.stringify(state.transactions));
-  }, [state.transactions]);
-
-  useEffect(() => {
-    localStorage.setItem('budgets', JSON.stringify(state.budgets));
-  }, [state.budgets]);
-
-  // Calculate balance
+  // Calculate total balance
   const calculateBalance = () => {
-    return state.transactions.reduce((acc, transaction) => {
-      return transaction.type === 'income' 
-        ? acc + parseFloat(transaction.amount) 
-        : acc - parseFloat(transaction.amount);
+    return transactions.reduce((total, transaction) => {
+      if (transaction.type === 'income') {
+        return total + parseFloat(transaction.amount);
+      } else {
+        return total - parseFloat(transaction.amount);
+      }
     }, 0);
   };
 
-  // Calculate income
+  const updateBudget = async (id, updatedBudget) => {
+    try {
+      const updatedBudgets = await api.updateBudget(id, updatedBudget);
+      setBudgets(updatedBudgets);
+      return true;
+    } catch (err) {
+      setError('Failed to update budget');
+      console.error(err);
+      return false;
+    }
+  };
+
+  // Calculate total income
   const calculateIncome = () => {
-    return state.transactions
+    return transactions
       .filter(transaction => transaction.type === 'income')
-      .reduce((acc, transaction) => acc + parseFloat(transaction.amount), 0);
+      .reduce((total, transaction) => total + parseFloat(transaction.amount), 0);
   };
 
-  // Calculate expenses
+  // Calculate total expenses
   const calculateExpenses = () => {
-    return state.transactions
+    return transactions
       .filter(transaction => transaction.type === 'expense')
-      .reduce((acc, transaction) => acc + parseFloat(transaction.amount), 0);
+      .reduce((total, transaction) => total + parseFloat(transaction.amount), 0);
   };
 
-  // Add transaction
-  const addTransaction = (transaction) => {
-    const newTransaction = {
-      ...transaction,
-      id: Date.now().toString(),
-      date: transaction.date || new Date().toISOString(),
-    };
-    dispatch({ type: 'ADD_TRANSACTION', payload: newTransaction });
+  // Add a transaction
+  const addTransaction = async (transaction) => {
+    try {
+      const updatedTransactions = await api.addTransaction(transaction);
+      setTransactions(updatedTransactions);
+      return true;
+    } catch (err) {
+      setError('Failed to add transaction');
+      console.error(err);
+      return false;
+    }
   };
 
-  // Delete transaction
-  const deleteTransaction = (id) => {
-    dispatch({ type: 'DELETE_TRANSACTION', payload: id });
+  // Delete a transaction
+  const deleteTransaction = async (id) => {
+    try {
+      const updatedTransactions = await api.deleteTransaction(id);
+      setTransactions(updatedTransactions);
+      return true;
+    } catch (err) {
+      setError('Failed to delete transaction');
+      console.error(err);
+      return false;
+    }
   };
 
-  // Add budget
-  const addBudget = (budget) => {
-    const newBudget = {
-      ...budget,
-      id: Date.now().toString(),
-    };
-    dispatch({ type: 'ADD_BUDGET', payload: newBudget });
+  // Add a budget
+  const addBudget = async (budget) => {
+    try {
+      const updatedBudgets = await api.addBudget(budget);
+      setBudgets(updatedBudgets);
+      return true;
+    } catch (err) {
+      setError('Failed to add budget');
+      console.error(err);
+      return false;
+    }
   };
 
-  // Update budget
-  const updateBudget = (budget) => {
-    dispatch({ type: 'UPDATE_BUDGET', payload: budget });
+  // Delete a budget
+  const deleteBudget = async (id) => {
+    try {
+      const updatedBudgets = await api.deleteBudget(id);
+      setBudgets(updatedBudgets);
+      return true;
+    } catch (err) {
+      setError('Failed to delete budget');
+      console.error(err);
+      return false;
+    }
   };
 
-  // Add category
-  const addCategory = (category) => {
-    const newCategory = {
-      ...category,
-      id: Date.now().toString(),
-    };
-    dispatch({ type: 'ADD_CATEGORY', payload: newCategory });
+  // Add a category
+  const addCategory = async (category) => {
+    try {
+      const updatedCategories = await api.addCategory(category);
+      setCategories(updatedCategories);
+      return true;
+    } catch (err) {
+      setError('Failed to add category');
+      console.error(err);
+      return false;
+    }
   };
 
-  // Get expenses by category
-  const getExpensesByCategory = () => {
-    const expensesByCategory = {};
-    
-    state.transactions
-      .filter(transaction => transaction.type === 'expense')
-      .forEach(transaction => {
-        const { categoryId, amount } = transaction;
-        expensesByCategory[categoryId] = (expensesByCategory[categoryId] || 0) + parseFloat(amount);
-      });
-      
-    return expensesByCategory;
+  // Update currency
+  const updateCurrency = async (newCurrency) => {
+    try {
+      const data = await api.updateCurrency(newCurrency);
+      setCurrency(data.currency);
+      return true;
+    } catch (err) {
+      setError('Failed to update currency');
+      console.error(err);
+      return false;
+    }
   };
 
-  // Value to be provided
+  // Clear all data
+  const clearAllData = async () => {
+    try {
+      const data = await api.clearAllData();
+      setTransactions(data.transactions);
+      setBudgets(data.budgets);
+      setCategories(data.categories);
+      setCurrency(data.currency);
+      return true;
+    } catch (err) {
+      setError('Failed to clear data');
+      console.error(err);
+      return false;
+    }
+  };
+
+  // Get recent transactions
+  const getRecentTransactions = (limit = 5) => {
+    return [...transactions]
+      .sort((a, b) => new Date(b.date) - new Date(a.date))
+      .slice(0, limit);
+  };
+
+  // Context value
   const value = {
-    transactions: state.transactions,
-    categories: state.categories,
-    budgets: state.budgets,
-    isLoading: state.isLoading,
-    error: state.error,
-    calculateBalance,
-    calculateIncome,
-    calculateExpenses,
+    transactions,
+    budgets,
+    categories,
+    currency,
+    isLoading,
+    error,
+    balance: calculateBalance(),
+    totalIncome: calculateIncome(),
+    totalExpenses: calculateExpenses(),
     addTransaction,
     deleteTransaction,
     addBudget,
     updateBudget,
+    deleteBudget,
     addCategory,
-    getExpensesByCategory,
+    setCurrency: updateCurrency,
+    clearAllData,
+    getRecentTransactions
   };
 
   return (
@@ -178,12 +211,4 @@ export const FinanceProvider = ({ children }) => {
     </FinanceContext.Provider>
   );
 };
-
-// Custom hook to use the finance context
-export const useFinance = () => {
-  const context = useContext(FinanceContext);
-  if (context === undefined) {
-    throw new Error('useFinance must be used within a FinanceProvider');
-  }
-  return context;
-};
+export { FinanceContext };
